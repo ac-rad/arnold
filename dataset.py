@@ -3,18 +3,22 @@ import torch
 import pickle
 import random
 import numpy as np
+import hydra
 from torch.utils.data import Dataset
 from scipy.spatial.transform import Rotation as R
 from cliport6d.utils.utils import get_fused_heightmap
 from utils.env import CAMERAS
-from utils.transforms import get_pose_world, create_pcd_hardcode
+from utils.transforms import *
+from peract.agent import CLIP_encoder,T5_encoder, RoBERTa
+from peract.utils import point_to_voxel_index, normalize_quaternion, quaternion_to_discrete_euler
+from tqdm import tqdm
 
+DEVICE = "cuda:0" if torch.cuda.is_available() else "cpu"
 pickle.DEFAULT_PROTOCOL=pickle.HIGHEST_PROTOCOL
 RANDOM_SEED=1125
 random.seed(RANDOM_SEED)
 np.random.seed(RANDOM_SEED)
 torch.manual_seed(RANDOM_SEED)
-
 
 def parse_state(filename):
     units = filename.split('-')
@@ -33,12 +37,24 @@ def parse_state(filename):
     else:
         init_state = float(units[-4])
         goal_state = float(units[-3])
-    
+
     return init_state, goal_state
+
+def create_lang_encoder(cfg, device):
+    if cfg.lang_encoder == 'clip':
+        return CLIP_encoder(device)
+    elif cfg.lang_encoder == 't5':
+        return T5_encoder(cfg.t5_cfg, device)
+    elif cfg.lang_encoder == 'roberta':
+        return RoBERTa(cfg.roberta_cfg, device)
+    elif cfg.lang_encoder == 'none':
+        return None
+    else:
+        raise ValueError('Language encoder key not supported')
 
 
 class ArnoldDataset(Dataset):
-    def __init__(self, data_path, task, obs_type='rgb', offset_bound=np.array([-0.63, 0, -0.63, 0.63, 1.26, 0.63])):
+    def __init__(self, data_path, task, cfg, obs_type='rgb', offset_bound=np.array([-0.63, 0, -0.63, 0.63, 1.26, 0.63])):
         """
         Dataset structure: {
             object_id: {
@@ -56,7 +72,102 @@ class ArnoldDataset(Dataset):
         self.sample_weights = [0.2, 0.8]
         self.obj_ids = []
         self.episode_dict = {}
+        self.lang_encoder = create_lang_encoder(cfg, DEVICE)
+        self.lang_embed_cache = InstructionEmbedding(self.lang_encoder)
         self._load_keyframes()
+    
+    def prepare_batch(self, batch_data, cfg, lang_embed_cache=None, device=DEVICE):
+        if lang_embed_cache is None:
+            lang_embed_cache = self.lang_embed_cache
+
+        obs_dict = {}
+        language_instructions = []
+        target_points = []
+        gripper_open = []
+        low_dim_state = []
+        current_states = []
+        goal_states = []
+        ext_matrices = []
+        intr_matrices = []
+        rgb_images = []
+        camera_positions = []
+        camera_rays = []
+        keyframes = []
+
+        for data in batch_data:
+            for k, v in data['obs_dict'].items():
+                if k not in obs_dict:
+                    obs_dict[k] = [v]
+                else:
+                    obs_dict[k].append(v)
+        
+            target_points.append(data['target_points'])
+            gripper_open.append(data['target_gripper'])
+            language_instructions.append(data['language'])
+            low_dim_state.append(data['low_dim_state'])
+            current_states.append(data['current_state'])
+            goal_states.append(data['goal_state'])
+            ext_matrices.append(data['ext_matrices'])
+            intr_matrices.append(data['intr_matrices'])
+            rgb_images.append(data['rgb_images'])
+            camera_positions.append(data['camera_positions'])
+            camera_rays.append(data['camera_rays'])
+            keyframes.append(data['keyframe'])
+
+
+        for k, v in obs_dict.items():
+            v = np.stack(v, axis=0)
+            obs_dict[k] = v.transpose(0, 3, 1, 2)   # peract requires input as [C, H, W]
+        
+        ext_matrices = np.stack(ext_matrices, axis=0)
+        intr_matrices = np.stack(intr_matrices, axis=0)
+        rgb_images = np.stack(rgb_images, axis=0)
+        camera_positions = np.stack(camera_positions, axis=0)
+        camera_rays = np.stack(camera_rays, axis=0)
+        keyframes = np.stack(keyframes, axis=0)
+
+        bs = len(language_instructions)
+        target_points = np.stack(target_points, axis=0)
+        gripper_open = np.array(gripper_open).reshape(bs, 1)
+        low_dim_state = np.stack(low_dim_state, axis=0)
+
+        current_states = np.array(current_states).reshape(bs, 1)
+        goal_states = np.array(goal_states).reshape(bs, 1)
+        states = np.concatenate([current_states, goal_states], axis=1)   # [bs, 2]
+
+        trans_action_coords = target_points[:, :3]
+        trans_action_indices = point_to_voxel_index(trans_action_coords, cfg.voxel_size, cfg.offset_bound)
+
+        rot_action_quat = target_points[:, 3:]
+        rot_action_quat = normalize_quaternion(rot_action_quat)
+        rot_action_indices = quaternion_to_discrete_euler(rot_action_quat, cfg.rotation_resolution)
+        rot_grip_action_indices = np.concatenate([rot_action_indices, gripper_open], axis=-1)
+
+        lang_goal_embs = lang_embed_cache.get_lang_embed(language_instructions)
+
+        inp = {}
+        inp.update(obs_dict)
+        inp.update({
+            'rgb_images': rgb_images,
+            'ext_matrices': ext_matrices,
+            'intr_matrices': intr_matrices,
+            'camera_positions': camera_positions,
+            'camera_rays': camera_rays,
+            'keyframes': keyframes,
+            'trans_action_indices': trans_action_indices,
+            'rot_grip_action_indices': rot_grip_action_indices,
+            'states': states,
+            'lang_goal_embs': lang_goal_embs,
+            'low_dim_state': low_dim_state
+        })
+
+        for k, v in inp.items():
+            if v is not None:
+                if not isinstance(v, torch.Tensor):
+                    v = torch.from_numpy(v)
+                inp[k] = v.to(device)
+        
+        return inp
     
     def _load_keyframes(self):
         """
@@ -75,7 +186,7 @@ class ArnoldDataset(Dataset):
             - combination of position at frame 3 and orientation at frame 4 as action label
         All template actions are in world frame.
         """
-        for fname in os.listdir(self.data_path):
+        for fname in tqdm(os.listdir(self.data_path)):
             if fname.endswith('npz'):
                 obj_id = fname.split('-')[2]
                 if obj_id not in self.episode_dict:
@@ -86,7 +197,7 @@ class ArnoldDataset(Dataset):
                             'act2': []
                         }
                     })
-                
+
                 init_state, goal_state = parse_state(fname)
 
                 gt_frames = np.load(os.path.join(self.data_path, fname), allow_pickle=True)['gt']
@@ -101,6 +212,7 @@ class ArnoldDataset(Dataset):
                 bound_center = robot_base_pos + robot_forward_direction
 
                 cmap, hmap, obs_dict = self.get_step_obs(step, self.task_offset[[0, 2, 1]], self.pixel_size, type=self.obs_type)
+                rgb_images, camera_locations, camera_rays, ext_matrices, int_matrices, _ = get_data_from_cameras(step['images'])
                 hmap = np.tile(hmap[..., None], (1,1,3))
                 img = np.concatenate([cmap, hmap], axis=-1)
 
@@ -119,9 +231,14 @@ class ArnoldDataset(Dataset):
                 gripper_joint_positions = np.clip(gripper_joint_positions, 0, 0.04)
                 timestep = 0
                 low_dim_state = np.array([gripper_open, *gripper_joint_positions, timestep])
-                
+
                 episode_dict1 = {
                     "img": img,   # [H, W, 6]
+                    "rgb_images": rgb_images,
+                    "camera_positions": camera_locations,
+                    "camera_rays": camera_rays,
+                    "ext_matrices": ext_matrices,
+                    "intr_matrices": int_matrices,
                     "obs_dict": obs_dict,   # { {camera_name}_{rgb/point_cloud}: [H, W, 3] }
                     "attention_points": obj_pos,   # [3,]
                     "target_points": target_points,   # [6,]
@@ -132,6 +249,7 @@ class ArnoldDataset(Dataset):
                     "goal_state": goal_state,   # scalar
                     "bounds": self.task_offset,   # [3, 2]
                     "pixel_size": self.pixel_size,   # scalar
+                    "keyframe": timestep,
                 }
 
                 self.episode_dict[obj_id]['act1'].append(episode_dict1)
@@ -144,6 +262,7 @@ class ArnoldDataset(Dataset):
                 robot_forward_direction = robot_forward_direction / np.linalg.norm(robot_forward_direction) * 0.5   # m
                 bound_center = robot_base_pos + robot_forward_direction
 
+                rgb_images, camera_locations, camera_rays, ext_matrices, int_matrices, _ = get_data_from_cameras(step['images'])
                 cmap, hmap, obs_dict = self.get_step_obs(step, self.task_offset[[0, 2, 1]], self.pixel_size, type=self.obs_type)
                 hmap = np.tile(hmap[..., None], (1,1,3))
                 img = np.concatenate([cmap, hmap], axis=-1)
@@ -157,7 +276,7 @@ class ArnoldDataset(Dataset):
                 else:
                     # default
                     act_rot = gt_frames[3]['position_rotation_world'][1].copy()
-                
+
                 act_pos /= 100
                 act_rot = act_rot[[1,2,3,0]]   # wxyz to xyzw
                 target_points = self.get_act_label_from_abs(pos_abs=act_pos, rot_abs=act_rot)
@@ -171,6 +290,11 @@ class ArnoldDataset(Dataset):
 
                 episode_dict2 = {
                     "img": img,   # [H, W, 6]
+                    "rgb_images": rgb_images,
+                    "camera_positions": camera_locations,
+                    "camera_rays": camera_rays,
+                    "ext_matrices": ext_matrices,
+                    "intr_matrices": int_matrices,
                     "obs_dict": obs_dict,   # { {camera_name}_{rgb/point_cloud}: [H, W, 3] }
                     "attention_points": obj_pos,   # [3,]
                     "target_points": target_points,   # [6,]
@@ -181,10 +305,11 @@ class ArnoldDataset(Dataset):
                     "goal_state": goal_state,   # scalar
                     "bounds": self.task_offset,   # [3, 2]
                     "pixel_size": self.pixel_size,   # scalar
+                    "keyframe": timestep,
                 }
 
                 self.episode_dict[obj_id]['act2'].append(episode_dict2)
-        
+
         print(f'Loaded {[len(v["act1"]) for k, v in self.episode_dict.items()]} demos')
 
     def __len__(self):
@@ -192,7 +317,7 @@ class ArnoldDataset(Dataset):
         for k, v in self.episode_dict.items():
             num_demos += len(v['act1'])
         return num_demos
-    
+
     def __getitem__(self, index):
         obj_demos = [len(v['act1']) for k, v in self.episode_dict.items()]
         interval_upper = np.cumsum(obj_demos)
@@ -209,8 +334,8 @@ class ArnoldDataset(Dataset):
         # obj_idx = random.choice(list(self.episode_dict.keys()))
         # act_idx = 1 + np.random.choice(2, size=1, p=self.sample_weights)[0]
         # return random.choice(self.episode_dict[obj_idx][f'act{act_idx}'])
-    
-    def sample(self, batch_size):
+
+    def sample(self, batch_size, cfg):
         samples = []
         sampled_idx = []
         while len(samples) < batch_size:
@@ -221,8 +346,8 @@ class ArnoldDataset(Dataset):
             if obj_act_demo_tuple not in sampled_idx:
                 samples.append(self.episode_dict[obj_idx][f'act{act_idx}'][demo_idx])
                 sampled_idx.append(obj_act_demo_tuple)
-        
-        return samples
+
+        return self.prepare_batch(samples, cfg)
 
     def get_step_obs(self, step, bounds, pixel_size, type='rgb'):
         # bounds: [3, 2], xyz (z-up)
@@ -257,11 +382,11 @@ class ArnoldDataset(Dataset):
                 f'{camera_name}_rgb': color,
                 f'{camera_name}_point_cloud': point_cloud
             })   # obs_dict is for peract, which requires y-up
-        
+
         # to fuse map, pcds and bounds are supposed to be xyz (z-up)
         cmap, hmap = get_fused_heightmap(colors, pcds, bounds, pixel_size)
         return cmap, hmap, obs_dict
-    
+
     def get_act_label_from_rel(self, pos_rel, rot_rel, robot_base):
         robot_pos, robot_rot = robot_base
         robot_rot = R.from_quat(robot_rot).as_matrix()
@@ -271,13 +396,12 @@ class ArnoldDataset(Dataset):
         else:
             rot_world = R.from_matrix(rot_world).as_quat()
             return np.concatenate([pos_world, rot_world])
-    
+
     def get_act_label_from_abs(self, pos_abs, rot_abs):
         if rot_abs is None:
             return pos_abs
         else:
             return np.concatenate([pos_abs, rot_abs])
-
 
 class ArnoldMultiTaskDataset(Dataset):
     task_list = [

@@ -1,8 +1,9 @@
-name: arnold
+name: arnold_demo
 channels:
   - defaults
 dependencies:
   - python=3.7.13
+  - pip
   - pip:
       - importlib-metadata==5.0.0
       - botocore==1.19.52

@@ -1,5 +1,7 @@
 *.npz
 /data
+/assets
+/ckpts
 *.zip
 output/
 arnold_tmp.code-workspace

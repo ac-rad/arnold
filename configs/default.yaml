@@ -2,9 +2,9 @@ hydra:
   run:
     dir: ${exp_dir}
 
-base_root: /root/arnold
-data_root: /vagrant/data
-asset_root: /vagrant
+base_root: ./
+data_root: /home/chemrobot/Documents/RichardHanxu2023/arnold/data
+asset_root: /home/chemrobot/Documents/RichardHanxu2023/arnold/assets
 output_root: ${base_root}/output
 
 mode: train   # train or eval

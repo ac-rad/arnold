@@ -3,6 +3,121 @@ import numpy as np
 from pxr import Gf
 from .compute_points import compute_points
 
+CAMERAS = ['front', 'base', 'left', 'wrist_bottom', 'wrist']
+
+def transform_points(points, transform, translate=True):
+    """ Apply linear transform to a np array of points.
+    Args:
+        points (np array [..., 3]): Points to transform.
+        transform (np array [3, 4] or [4, 4]): Linear map.
+        translate (bool): If false, do not apply translation component of transform.
+    Returns:
+        transformed points (np array [..., 3])
+    """
+    # Append ones or zeros to get homogenous coordinates
+    if translate:
+        constant_term = np.ones_like(points[..., :1])
+    else:
+        constant_term = np.zeros_like(points[..., :1])
+    points = np.concatenate((points, constant_term), axis=-1)
+
+    points = np.einsum('nm,...m->...n', transform, points)
+    return points[..., :3]
+
+def get_rays(camera):
+    height = camera['resolution']['height']
+    width =  camera['resolution']['width']
+    focal_length = camera['focal_length']
+    horiz_aperture = camera['horizontal_aperture']
+    vert_aperture = height / width * horiz_aperture
+
+    fx = width * focal_length / horiz_aperture
+    fy = height * focal_length / vert_aperture
+
+    cx = cy = height/2
+    i, j = np.meshgrid(np.arange(width),
+                        np.arange(height), indexing='xy')
+    dirs = np.stack([(i-cx)/fx, -(j-cy)/fy, np.ones_like(i)], -1)
+    return dirs
+
+def ray_transform_normalize(camera_extr, rays):
+    """
+    Args:
+        camera_extr: [4, 4].
+        rays: [height, width, 3]
+    Returns:
+        rays: [height, width, 3]
+    """
+    rays = transform_points(rays, camera_extr[:3, :], translate=False)
+    ray_norms = np.linalg.norm(rays, axis=2, keepdims=True)
+    rays = rays / ray_norms
+    return rays
+
+def create_int_matrix(camera: dict):
+    height = camera['resolution']['height']
+    width =  camera['resolution']['width']
+    focal_length = camera['focal_length']
+    horiz_aperture = camera['horizontal_aperture']
+    vert_aperture = height / width * horiz_aperture
+
+    fx = width * focal_length / horiz_aperture
+    fy = height * focal_length / vert_aperture
+
+    cx = cy = height/2
+
+    # The result array is homogeneous 4x4
+    return np.array([
+        [fx, 0, cx, 0],
+        [0, fy, cy, 0],
+        [0, 0, 1, 0],
+        [0, 0, 0, 1]
+    ], dtype=np.int32)
+
+def get_data_from_cameras(imgs):
+    """
+    Returns RGB images, camera positions, ray directions, and inverse-extrinsic matrices
+    for a specified observation and image size (height and width)
+    Returns:
+        rgb_images: ndarray(1, len(cameras), width, height, 3)
+        camera_locations: ndarray(1, len(cameras), 3)
+        camera_rays: ndarray(1, len(cameras), width, height, 3)
+        inv_ext_matrices: ndarray(1, len(cameras), 4, 4)
+    """
+    rgb_images = []
+    camera_locations = []
+    camera_rays = []
+    inv_ext_matrices = []
+    int_matrices= []
+    pcds = []
+
+    for camera_name, camera_obs in zip(CAMERAS, imgs):
+        camera = camera_obs['camera']
+        # Get rgb image
+        color = camera_obs['rgb'][:, :, :3]
+        depth = camera_obs['depthLinear']
+        # Get PCD
+        pcd = create_pcd_hardcode(camera, depth)
+
+        # Get extrinsic/intrinsic matrices
+        # Extrinsic matrix obtained is a transformation from the camera to world coordinates
+        inv_ext_matrix = camera['pose']
+        int_matrix = create_int_matrix(camera)
+
+        # Get camera location
+        camera_location = inv_ext_matrix[:3, -1] # (3,)
+
+        # Convert ray vectors from camera-coordinates to world-coordinates
+        rays = get_rays(camera)
+        rays = ray_transform_normalize(inv_ext_matrix, rays)
+        rgb_images.append(color) # (num_images, width, height, 3)
+        camera_locations.append(camera_location)
+        camera_rays.append(rays)
+        inv_ext_matrices.append(inv_ext_matrix)
+        int_matrices.append(int_matrix)
+        pcds.append(pcd)
+
+    return np.array(rgb_images), np.array(camera_locations), np.array(camera_rays), \
+    np.array(inv_ext_matrices), np.array(int_matrices), np.array(pcds)
 
 def get_pose_world(trans_rel, rot_rel, robot_pos, robot_rot):
     if rot_rel is not None:
