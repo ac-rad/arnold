@@ -6,6 +6,9 @@ import json
 import typing
 import logging
 from omni.isaac.kit import SimulationApp
+import os
+os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
+os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
 
 def get_available_vrams():
@@ -33,13 +36,12 @@ def get_simulation(simulation_app = None, simulation_context=None, headless=True
     new_simulation = False
 
     if simulation_app is None:
-        
+        gpu_to_use = 0
         simulation_app = SimulationApp({"headless": _headless, "anti_aliasing": 0, 'active_gpu':gpu_id, 'multi_gpu': False})
         
         # for high quality path tracing
         # simulation_app = SimulationApp({"headless": _headless, "anti_aliasing": 0, 'active_gpu':gpu_id, 'multi_gpu': False,
         #                                 "renderer": "PathTracing", "samples_per_pixel_per_frame": 32, "max_bounces": 32})
-
         logging.getLogger("omni.hydra").setLevel(logging.ERROR)
         logging.getLogger("omni.isaac.urdf").setLevel(logging.ERROR)
         logging.getLogger("omni.physx.plugin").setLevel(logging.ERROR)

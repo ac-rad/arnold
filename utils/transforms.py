@@ -67,10 +67,9 @@ def create_int_matrix(camera: dict):
 
     # The result array is homogeneous 4x4
     return np.array([
-        [fx, 0, cx, 0],
-        [0, fy, cy, 0],
-        [0, 0, 1, 0],
-        [0, 0, 0, 1]
+        [fx, 0, cx],
+        [0, fy, cy],
+        [0, 0, 1],
     ], dtype=np.int32)
 
 def get_data_from_cameras(imgs):
@@ -94,13 +93,17 @@ def get_data_from_cameras(imgs):
         camera = camera_obs['camera']
         # Get rgb image
         color = camera_obs['rgb'][:, :, :3]
-        depth = camera_obs['depthLinear']
+        color = color / 255.0
+        color = color.transpose(2, 0, 1)
+        depth = np.clip(camera_obs['depthLinear'], 0, 10)
+        
         # Get PCD
         pcd = create_pcd_hardcode(camera, depth)
 
         # Get extrinsic/intrinsic matrices
         # Extrinsic matrix obtained is a transformation from the camera to world coordinates
         inv_ext_matrix = camera['pose']
+        inv_ext_matrix = np.linalg.inv(inv_ext_matrix)
         int_matrix = create_int_matrix(camera)
 
         # Get camera location
@@ -270,7 +273,6 @@ def create_pcd_hardcode(camera, depth, cm_to_m=True):
     cx = cy = height/2
 
     points_cam = compute_points(height, width, depth, fx, fy, cx, cy)
-    
     T = camera['pose'].T
     Rotation = T[:3, :3]
     t = T[:3, 3]

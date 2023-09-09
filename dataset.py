@@ -41,7 +41,8 @@ def parse_state(filename):
     return init_state, goal_state
 
 def create_lang_encoder(cfg, device):
-    if cfg.lang_encoder == 'clip':
+    lang_encoder = 'clip'
+    if lang_encoder == 'clip':
         return CLIP_encoder(device)
     elif cfg.lang_encoder == 't5':
         return T5_encoder(cfg.t5_cfg, device)
@@ -52,6 +53,54 @@ def create_lang_encoder(cfg, device):
     else:
         raise ValueError('Language encoder key not supported')
 
+def prepare_batch(dataset, batch_data, lang_embed_cache=None, device='cuda:0'):
+        if lang_embed_cache is None:
+            lang_embed_cache = dataset.lang_embed_cache
+        # bs = dataset.cfg.batch_size
+        bs = 1
+
+        current_states = batch_data['current_state'].cpu().numpy()
+        goal_states = batch_data['goal_state'].cpu().numpy()
+        current_states = np.array(current_states).reshape(bs, 1)
+        goal_states = np.array(goal_states).reshape(bs, 1)
+        states = np.concatenate([current_states, goal_states], axis=1)   # [bs, 2]
+
+        target_points = batch_data['target_points'].cpu().numpy()
+        trans_action_coords = target_points[:, :3]
+        voxel_size = 120
+        offset_bound = [-0.63, 0, -0.63, 0.63, 1.26, 0.63]
+        trans_action_indices = point_to_voxel_index(trans_action_coords, voxel_size, offset_bound)
+
+        gripper_open = batch_data['target_gripper'].cpu().numpy().reshape(bs, 1)
+        rot_action_quat = target_points[:, 3:]
+        rot_action_quat = normalize_quaternion(rot_action_quat)
+        rotation_resolution = 5
+        rot_action_indices = quaternion_to_discrete_euler(rot_action_quat, rotation_resolution)
+        rot_grip_action_indices = np.concatenate([rot_action_indices, gripper_open], axis=-1)
+
+        language_instructions = batch_data['language']
+        lang_goal_embs = lang_embed_cache.get_lang_embed(language_instructions)
+
+        inp = {}
+        inp.update({
+            # 'input_images': rgb_images,
+            # 'ext_matrices': ext_matrices,
+            # 'intr_matrices': intr_matrices,
+            # 'input_camera_pos': camera_positions,
+            # 'input_rays': camera_rays,
+            # 'keyframes': keyframes,
+            'trans_action_indicies': torch.from_numpy(trans_action_indices),
+            'rot_grip_action_indicies': torch.from_numpy(rot_grip_action_indices),
+            'states': torch.from_numpy(states),
+            'lang_goal_embs': lang_goal_embs.to(device, dtype=torch.float),
+            # 'low_dim_state': low_dim_state
+        })
+
+        for k in inp.keys():
+            batch_data[k] = inp[k].to(device)
+        
+
+        return batch_data
 
 class ArnoldDataset(Dataset):
     def __init__(self, data_path, task, cfg, obs_type='rgb', offset_bound=np.array([-0.63, 0, -0.63, 0.63, 1.26, 0.63])):
@@ -75,10 +124,13 @@ class ArnoldDataset(Dataset):
         self.lang_encoder = create_lang_encoder(cfg, DEVICE)
         self.lang_embed_cache = InstructionEmbedding(self.lang_encoder)
         self._load_keyframes()
+        self.cfg = cfg
     
-    def prepare_batch(self, batch_data, cfg, lang_embed_cache=None, device=DEVICE):
+    def prepare_batch(self, batch_data, cfg=None, lang_embed_cache=None, device=DEVICE):
         if lang_embed_cache is None:
             lang_embed_cache = self.lang_embed_cache
+        if cfg is None:
+            cfg = self.cfg
 
         obs_dict = {}
         language_instructions = []
@@ -109,19 +161,19 @@ class ArnoldDataset(Dataset):
             goal_states.append(data['goal_state'])
             ext_matrices.append(data['ext_matrices'])
             intr_matrices.append(data['intr_matrices'])
-            rgb_images.append(data['rgb_images'])
-            camera_positions.append(data['camera_positions'])
-            camera_rays.append(data['camera_rays'])
+            rgb_images.append(data['input_images'])
+            camera_positions.append(data['input_camera_pos'])
+            camera_rays.append(data['input_rays'])
             keyframes.append(data['keyframe'])
 
 
         for k, v in obs_dict.items():
             v = np.stack(v, axis=0)
             obs_dict[k] = v.transpose(0, 3, 1, 2)   # peract requires input as [C, H, W]
-        
         ext_matrices = np.stack(ext_matrices, axis=0)
         intr_matrices = np.stack(intr_matrices, axis=0)
         rgb_images = np.stack(rgb_images, axis=0)
+        rgb_images = rgb_images.transpose(0, 1, 4, 2, 3)
         camera_positions = np.stack(camera_positions, axis=0)
         camera_rays = np.stack(camera_rays, axis=0)
         keyframes = np.stack(keyframes, axis=0)
@@ -136,11 +188,14 @@ class ArnoldDataset(Dataset):
         states = np.concatenate([current_states, goal_states], axis=1)   # [bs, 2]
 
         trans_action_coords = target_points[:, :3]
-        trans_action_indices = point_to_voxel_index(trans_action_coords, cfg.voxel_size, cfg.offset_bound)
+        voxel_size = 120
+        offset_bound = [-0.63, 0, -0.63, 0.63, 1.26, 0.63]
+        trans_action_indices = point_to_voxel_index(trans_action_coords, voxel_size, offset_bound)
 
         rot_action_quat = target_points[:, 3:]
         rot_action_quat = normalize_quaternion(rot_action_quat)
-        rot_action_indices = quaternion_to_discrete_euler(rot_action_quat, cfg.rotation_resolution)
+        rotation_resolution = 5
+        rot_action_indices = quaternion_to_discrete_euler(rot_action_quat, rotation_resolution)
         rot_grip_action_indices = np.concatenate([rot_action_indices, gripper_open], axis=-1)
 
         lang_goal_embs = lang_embed_cache.get_lang_embed(language_instructions)
@@ -148,14 +203,14 @@ class ArnoldDataset(Dataset):
         inp = {}
         inp.update(obs_dict)
         inp.update({
-            'rgb_images': rgb_images,
+            'input_images': rgb_images,
             'ext_matrices': ext_matrices,
             'intr_matrices': intr_matrices,
-            'camera_positions': camera_positions,
-            'camera_rays': camera_rays,
+            'input_camera_pos': camera_positions,
+            'input_rays': camera_rays,
             'keyframes': keyframes,
-            'trans_action_indices': trans_action_indices,
-            'rot_grip_action_indices': rot_grip_action_indices,
+            'trans_action_indicies': trans_action_indices,
+            'rot_grip_action_indicies': rot_grip_action_indices,
             'states': states,
             'lang_goal_embs': lang_goal_embs,
             'low_dim_state': low_dim_state
@@ -166,7 +221,6 @@ class ArnoldDataset(Dataset):
                 if not isinstance(v, torch.Tensor):
                     v = torch.from_numpy(v)
                 inp[k] = v.to(device)
-        
         return inp
     
     def _load_keyframes(self):
@@ -234,9 +288,9 @@ class ArnoldDataset(Dataset):
 
                 episode_dict1 = {
                     "img": img,   # [H, W, 6]
-                    "rgb_images": rgb_images,
-                    "camera_positions": camera_locations,
-                    "camera_rays": camera_rays,
+                    "input_images": rgb_images,
+                    "input_camera_pos": camera_locations,
+                    "input_rays": camera_rays,
                     "ext_matrices": ext_matrices,
                     "intr_matrices": int_matrices,
                     "obs_dict": obs_dict,   # { {camera_name}_{rgb/point_cloud}: [H, W, 3] }
@@ -290,9 +344,9 @@ class ArnoldDataset(Dataset):
 
                 episode_dict2 = {
                     "img": img,   # [H, W, 6]
-                    "rgb_images": rgb_images,
-                    "camera_positions": camera_locations,
-                    "camera_rays": camera_rays,
+                    "input_images": rgb_images,
+                    "input_camera_pos": camera_locations,
+                    "input_rays": camera_rays,
                     "ext_matrices": ext_matrices,
                     "intr_matrices": int_matrices,
                     "obs_dict": obs_dict,   # { {camera_name}_{rgb/point_cloud}: [H, W, 3] }
@@ -335,7 +389,12 @@ class ArnoldDataset(Dataset):
         # act_idx = 1 + np.random.choice(2, size=1, p=self.sample_weights)[0]
         # return random.choice(self.episode_dict[obj_idx][f'act{act_idx}'])
 
-    def sample(self, batch_size, cfg):
+    def sample(self, batch_size=None, cfg=None):
+        if cfg is None:
+            cfg = self.cfg
+        if batch_size is None:
+            batch_size = 1
+            
         samples = []
         sampled_idx = []
         while len(samples) < batch_size:

@@ -2,12 +2,12 @@ hydra:
   run:
     dir: ${exp_dir}
 
-base_root: ./
-data_root: /home/chemrobot/Documents/RichardHanxu2023/arnold/data
-asset_root: /home/chemrobot/Documents/RichardHanxu2023/arnold/assets
+base_root: ./aarnold_dataset
+data_root: /home/chemrobot/Documents/RichardHanxu2023/SRTACT_Eval/arnold_dataset/data
+asset_root: /home/chemrobot/Documents/RichardHanxu2023/SRTACT_Eval/arnold_dataset/assets
 output_root: ${base_root}/output
 
-mode: train   # train or eval
+mode: eval   # train or eval
 task: null
 model: null
 obs_type: rgb
@@ -20,7 +20,7 @@ checkpoint_dir: ${exp_dir}/ckpts
 
 
 # ------------------running arguments------------------
-batch_size: 1
+batch_size: 10
 steps: 100000
 epochs: null
 log_interval: 50
