@@ -260,6 +260,7 @@ class ArnoldDataset(Dataset):
                 # pick phase
                 step = gt_frames[0].copy()
                 robot_base_pos = step['robot_base'][0] / 100
+                print(f'Robot Base {robot_base_pos * 100}')
                 robot_forward_direction = R.from_quat(step['robot_base'][1][[1,2,3,0]]).as_matrix()[:, 0]
                 robot_forward_direction[1] = 0   # height
                 robot_forward_direction = robot_forward_direction / np.linalg.norm(robot_forward_direction) * 0.5   # m

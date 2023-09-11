@@ -14,13 +14,13 @@ from omni.kit.material.library import get_material_prim_path
 from omni.isaac.dynamic_control import _dynamic_control
 from omni.physx.scripts import physicsUtils
 
+
 import pxr
-from pxr import UsdPhysics, Gf, PhysxSchema, UsdShade
+from pxr import UsdPhysics, Gf, PhysxSchema, UsdShade, UsdGeom
 import time
 from omni.isaac.synthetic_utils import SyntheticDataHelper
 from abc import ABC
 from omni.isaac.franka.controllers import RMPFlowController
-
 
 class BaseTask(ABC):
     material_library = {}
@@ -345,12 +345,12 @@ class BaseTask(ABC):
         
         add_update_semantics(get_prim_at_path(prim_path), "Robot")
         self._wait_for_loading()
-        self._set_sensors()
+        self._set_sensors(robot)
      
         return robot
 
-    def _set_sensors(self):
-        self._register_camera_path()
+    def _set_sensors(self, robot=None):
+        self._register_camera_path(robot)
         BaseTask.sd_helpers = [] 
         BaseTask.viewport_windows = []
 
@@ -387,20 +387,130 @@ class BaseTask(ABC):
         self.kit.update()
         self._sensor_initialized = True
     
-    def _register_camera_path(self):
+    def _register_camera_path(self, robot=None):
         self.camera_paths = []
-        
+        if robot is not None:
+            self._add_cube_cameras()
+
         robot_path = f'/World_{0}/franka'
         camera_paths = [ 
             f'{robot_path}/FrontCamera', 
             f'{robot_path}/BaseCamera',
             f'{robot_path}/LeftCamera',
-            f'{robot_path}/panda_hand/GripperCameraBottom',
-            f'{robot_path}/panda_hand/GripperCamera'
+            f'{robot_path}/panda_hand/gripperCameraBottom',
+            f'{robot_path}/panda_hand/gripperCamera',
         ]
 
+        camera_paths.extend([
+            "/World_0/Camera_Forward",
+            "/World_0/Camera_Top",
+            "/World_0/Camera_Back",
+            "/World_0/Camera_Left",
+            "/World_0/Camera_Right",
+            "/World_0/CameraCOF",
+            ])
+        
         for camera_path in camera_paths:
             self.camera_paths.append(camera_path)
+
+
+    def _add_cube_cameras(self, usd_stage=None):
+        # Access the main USD stage
+        main_stage = omni.usd.get_context().get_stage()
+
+        robot_path = "/World_0/franka" 
+        # franka_base_path = f"{robot_path}/panda_hand" 
+        franka_base_path = robot_path
+
+        # Get the transform for the franka_base
+        franka_base = main_stage.GetPrimAtPath(franka_base_path)
+        pose = omni.usd.utils.get_world_transform_matrix(franka_base)
+        
+        # Extract translation (translation part of the matrix)
+        arnold_base_trans = pose.ExtractTranslation()
+
+        print('Trans is')
+        print(arnold_base_trans)
+        # Extract Rotation matrix
+        arnold_base_rot = pose.ExtractRotationMatrix()
+        print('Rotation is')
+        print(arnold_base_rot)
+
+        scale = 3
+
+        # Define the camera path within the main stage (you can choose any path you like)
+        camera_path_forward = "/World_0/Camera_Forward"
+        camera_path_top = "/World_0/Camera_Top"
+        camera_path_back = "/World_0/Camera_Back"
+        camera_path_left = "/World_0/Camera_Left"
+        camera_path_right = "/World_0/Camera_Right"
+        camera_cof = "/World_0/CameraCOF"
+        cam_paths = [camera_path_forward, camera_path_top, camera_path_back, camera_path_left, camera_path_right, camera_cof]
+        cam_names = ['forward', 'top', 'back', 'left', 'right']
+
+
+        translations = np.array([
+       [ 2.01308787e-01, -4.87864017e-05,  2.67479619e+00],
+       [ 2.01308787e-01,  1.74974408e+00,  1.17497365e+00],
+       [ 2.01308787e-01, -1.74984165e+00,  1.17497375e+00],
+       [ 1.95110166e+00, -4.87864017e-05,  1.17497365e+00],
+       [-1.54848408e+00, -4.87864017e-05,  1.17497375e+00]]) # * 100
+        
+        center_of_action = (arnold_base_trans + translations[-1]) + (arnold_base_trans + translations[-2])
+        center_of_action /= 2
+
+        translations = np.array([
+            [0, -1.74979287, 0],
+            [0, 0, 1.74979287],
+            [0, 1.74979287, 0],
+            [-1.74979287, 0, 0],
+            [1.74979287, 0, 0],
+            ]) * 2.5
+        
+        # The default metric in ommni kit is centimeters, so we multiply by 100
+        translations *= 100
+
+        for i, cam_path in enumerate(cam_paths):
+            # Create the camera and set its attributes
+            camera = UsdGeom.Camera.Define(main_stage, cam_path)
+            camera = UsdGeom.Xformable(camera)
+
+            if i == 5:
+                transformation_matrix = Gf.Matrix4d()
+                transformation_matrix.SetTranslateOnly(Gf.Vec3d(*center_of_action))
+                camera.AddTransformOp().Set(transformation_matrix)
+                print(f'Center of Action is {center_of_action} | {type(center_of_action)}')
+                continue
+
+            # Calculate the up vector (you can choose an appropriate up vector based on your desired orientation)
+            up_vector = Gf.Vec3d(0.0, 1.0, 0.0)
+            
+            translations[i][1] += 16.33
+
+            cam_loc = Gf.Vec3d(*translations[i]) + Gf.Vec3d(*center_of_action)  # Camera position
+            
+            # Calculate the rotation matrix to look at the center of action
+            rotation_matrix = Gf.Matrix4d().SetLookAt(
+                cam_loc,
+                Gf.Vec3d(*center_of_action),  # Look-at position
+                up_vector  # Up vector
+            )
+
+            # rotation_matrix = Gf.Matrix3d(rotations[i])
+            print('Rot matrix is')
+            print(rotation_matrix)
+
+            # Apply translation
+            transformation_matrix = Gf.Matrix4d()
+            transformation_matrix.SetTranslateOnly(cam_loc)
+            transformation_matrix.SetRotateOnly(rotation_matrix.ExtractRotation())
+            camera.AddTransformOp().Set(transformation_matrix)
+            
+            if 'right' in cam_path.lower() or 'left' in cam_path.lower():
+                # Rotate the camera by 180 degrees around its local X-axis
+                camera.AddRotateYOp().Set(value=180.0)
+            print('Cam pose')
+            print(transformation_matrix)
 
     def _wait_for_loading(self):
         sim = SimulationContext.instance()
