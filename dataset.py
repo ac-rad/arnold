@@ -58,8 +58,7 @@ def create_lang_encoder(cfg, device):
 def prepare_batch(dataset, batch_data, lang_embed_cache=None, device='cuda:0'):
         if lang_embed_cache is None:
             lang_embed_cache = dataset.lang_embed_cache
-        # bs = dataset.cfg.batch_size
-        bs = 1
+        bs = batch_data['input_images'].shape[0]
 
         current_states = batch_data['current_state'].cpu().numpy()
         goal_states = batch_data['goal_state'].cpu().numpy()
