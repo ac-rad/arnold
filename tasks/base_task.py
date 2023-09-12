@@ -34,6 +34,8 @@ class BaseTask(ABC):
         self.timeline = omni.timeline.get_timeline_interface()
         self.kit = omni.kit.app.get_app()
 
+        self.cube_camera_is_set = False
+
         self.objects_list = []
     
     def success(self):
@@ -407,7 +409,6 @@ class BaseTask(ABC):
             "/World_0/Camera_Back",
             "/World_0/Camera_Left",
             "/World_0/Camera_Right",
-            "/World_0/CameraCOF",
             ])
         
         for camera_path in camera_paths:
@@ -429,14 +430,12 @@ class BaseTask(ABC):
         # Extract translation (translation part of the matrix)
         arnold_base_trans = pose.ExtractTranslation()
 
-        print('Trans is')
-        print(arnold_base_trans)
-        # Extract Rotation matrix
-        arnold_base_rot = pose.ExtractRotationMatrix()
-        print('Rotation is')
-        print(arnold_base_rot)
+        # print('Trans is')
+        # print(arnold_base_trans)
 
         scale = 3
+
+        house_path = "/World_0/house"
 
         # Define the camera path within the main stage (you can choose any path you like)
         camera_path_forward = "/World_0/Camera_Forward"
@@ -444,9 +443,9 @@ class BaseTask(ABC):
         camera_path_back = "/World_0/Camera_Back"
         camera_path_left = "/World_0/Camera_Left"
         camera_path_right = "/World_0/Camera_Right"
-        camera_cof = "/World_0/CameraCOF"
-        cam_paths = [camera_path_forward, camera_path_top, camera_path_back, camera_path_left, camera_path_right, camera_cof]
-        cam_names = ['forward', 'top', 'back', 'left', 'right']
+        # camera_coa = "/World_0/CameraCOA"
+        cam_paths = [camera_path_forward, camera_path_top, camera_path_back, camera_path_left, camera_path_right]
+        # ['forward', 'top', 'back', 'left', 'right']
 
 
         translations = np.array([
@@ -475,12 +474,12 @@ class BaseTask(ABC):
             camera = UsdGeom.Camera.Define(main_stage, cam_path)
             camera = UsdGeom.Xformable(camera)
 
-            if i == 5:
-                transformation_matrix = Gf.Matrix4d()
-                transformation_matrix.SetTranslateOnly(Gf.Vec3d(*center_of_action))
-                camera.AddTransformOp().Set(transformation_matrix)
-                print(f'Center of Action is {center_of_action} | {type(center_of_action)}')
-                continue
+            # if i == 5:
+            #     transformation_matrix = Gf.Matrix4d()
+            #     transformation_matrix.SetTranslateOnly(Gf.Vec3d(*center_of_action))
+            #     camera.AddTransformOp().Set(transformation_matrix)
+            #     print(f'Center of Action is {center_of_action} | {type(center_of_action)}')
+            #     continue
 
             # Calculate the up vector (you can choose an appropriate up vector based on your desired orientation)
             up_vector = Gf.Vec3d(0.0, 1.0, 0.0)
@@ -497,20 +496,33 @@ class BaseTask(ABC):
             )
 
             # rotation_matrix = Gf.Matrix3d(rotations[i])
-            print('Rot matrix is')
-            print(rotation_matrix)
+            # print('Rot matrix is')
+            # print(rotation_matrix)
 
             # Apply translation
             transformation_matrix = Gf.Matrix4d()
             transformation_matrix.SetTranslateOnly(cam_loc)
             transformation_matrix.SetRotateOnly(rotation_matrix.ExtractRotation())
+            
+            camera.ClearXformOpOrder()
             camera.AddTransformOp().Set(transformation_matrix)
             
             if 'right' in cam_path.lower() or 'left' in cam_path.lower():
                 # Rotate the camera by 180 degrees around its local X-axis
                 camera.AddRotateYOp().Set(value=180.0)
-            print('Cam pose')
-            print(transformation_matrix)
+
+            self._set_prim_invisible(house_path, main_stage)
+            
+            # print('Cam pose')
+            # print(transformation_matrix)
+
+
+    def _set_prim_invisible(self, prim_path, main_stage):
+        prim = main_stage.GetPrimAtPath(prim_path)
+        prim_visibility_attr = UsdGeom.Imageable(prim).GetVisibilityAttr()
+
+        # Set the visibility to invisible for the cube cameras
+        prim_visibility_attr.Set(value=UsdGeom.Tokens.invisible)
 
     def _wait_for_loading(self):
         sim = SimulationContext.instance()
