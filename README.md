@@ -6,6 +6,21 @@
 <b>ICCV 2023</b>
 </div>
 
+<code align="center" margin-botttom="6em">
+from dataset import ArnoldDataset, prepare_batch
+
+cfg = {}
+train_dataset = ArnoldDataset('/home/chemrobot/Documents/RichardHanxu2023/SRTACT_Eval/arnold_re_rendered/open_drawer/train', task, cfg)
+train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=batch_size, pin_memory=True,num_workers=min(batch_size,os.cpu_count()//world_size), sampler=train_sampler, shuffle=shuffle, persistent_workers=True)
+
+for batch_ndx, sample in enumerate(train_loader):
+           batch = {k: v.to(device, non_blocking = True, dtype=torch.float) for k, v in sample.items() if type(v) == torch.Tensor}
+            batch["language"] = sample["language"]
+            batch['ignore_collisions'] = torch.zeros(batch_size, 1).to(device).long()
+            batch = prepare_batch(train_dataset, batch)
+            # rest of the code
+</code>
+
 <div align="center" margin-bottom="6em">
 Ran Gong<sup>✶</sup>, Jiangyong Huang<sup>✶</sup>, Yizhou Zhao, Haoran Geng, Xiaofeng Gao, Qingyang Wu <br/> Wensi Ai, Ziheng Zhou, Demetri Terzopoulos, Song-Chun Zhu, Baoxiong Jia, Siyuan Huang
 </div>
