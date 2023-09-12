@@ -7,7 +7,8 @@ import torch.nn as nn
 import sys
 import numpy as np
 from pathlib import Path
-from environment.runner_utils import get_simulation
+sys.path.append('/home/chemrobot/Documents/RichardHanxu2023/SRTACT_Eval/arnold_dataset')
+from arnold_dataset.environment.runner_utils import get_simulation
 import matplotlib.pyplot as plt
 
 SAVE_DIR = '/home/chemrobot/Documents/RichardHanxu2023/SRTACT_Eval/arnold_re_rendered'
@@ -37,7 +38,7 @@ def add_cube_to_observation(obs, gt_frame):
    return np.concatenate((gt_frame['images'], obs['images'][5:]))
 
 def save_observation_np(gt_frame, path):
-   np.save(path, gt_frame, allow_pickle=True)
+   np.savez(path, gt_frame)
 
 def main(cfg):
   device = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -49,7 +50,6 @@ def main(cfg):
   
   obs_counter = 0
   episode_counter = 0
-  i = 0
 
   while simulation_app.is_running():
     
@@ -58,10 +58,22 @@ def main(cfg):
       os.makedirs(os.path.join(SAVE_DIR, task, SPLIT), exist_ok=True)
       print(f"Rendering {len(data)} episodes")
 
+      number_of_rendered = len([name for name in os.listdir(os.path.join(SAVE_DIR, task, SPLIT))])
+
+      if number_of_rendered > 0:
+         data = data[number_of_rendered:]
+         fnames = fnames[number_of_rendered:]
+      
+      if SPLIT == 'train':
+        data = data[:50]
+      elif SPLIT == 'val':
+        data = data[:10]
+      elif SPLIT == 'test':
+         data = data[:10]
+      else:
+        raise Exception("Invalid Split!")
+
       while len(data) > 0:
-        print(f"Episode {i}")
-        i += 1
-        
         anno = data.pop(0)
         fname = fnames.pop(0)
         gt_frames = anno['gt'].copy()

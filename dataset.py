@@ -203,11 +203,14 @@ class ArnoldDataset(Dataset):
         inp = {}
         inp.update(obs_dict)
         inp.update({
-            'input_images': rgb_images,
+            'input_images': rgb_images[:3],
+            'target_images': rgb_images[5:],
             'ext_matrices': ext_matrices,
             'intr_matrices': intr_matrices,
-            'input_camera_pos': camera_positions,
-            'input_rays': camera_rays,
+            'input_camera_pos': camera_positions[:3],
+            'target_camera_pos': camera_positions[5:],
+            'input_rays': camera_rays[:3],
+            'target_rays': camera_rays[5:],
             'keyframes': keyframes,
             'trans_action_indicies': trans_action_indices,
             'rot_grip_action_indicies': rot_grip_action_indices,
@@ -289,9 +292,12 @@ class ArnoldDataset(Dataset):
 
                 episode_dict1 = {
                     "img": img,   # [H, W, 6]
-                    "input_images": rgb_images,
-                    "input_camera_pos": camera_locations,
-                    "input_rays": camera_rays,
+                    "input_images": rgb_images[:3],
+                    "target_images": rgb_images[5:],
+                    "input_camera_pos": camera_locations[:3],
+                    "target_camera_pos": camera_locations[5:],
+                    "input_rays": camera_rays[:3],
+                    "target_rays": camera_rays[5:],
                     "ext_matrices": ext_matrices,
                     "intr_matrices": int_matrices,
                     "obs_dict": obs_dict,   # { {camera_name}_{rgb/point_cloud}: [H, W, 3] }
@@ -345,9 +351,12 @@ class ArnoldDataset(Dataset):
 
                 episode_dict2 = {
                     "img": img,   # [H, W, 6]
-                    "input_images": rgb_images,
-                    "input_camera_pos": camera_locations,
-                    "input_rays": camera_rays,
+                    "input_images": rgb_images[:3],
+                    "target_images": rgb_images[5:],
+                    "input_camera_pos": camera_locations[:3],
+                    "target_camera_pos": camera_locations[5:],
+                    "input_rays": camera_rays[:3],
+                    "target_rays": camera_rays[5:],
                     "ext_matrices": ext_matrices,
                     "intr_matrices": int_matrices,
                     "obs_dict": obs_dict,   # { {camera_name}_{rgb/point_cloud}: [H, W, 3] }
