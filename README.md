@@ -6,7 +6,7 @@
 <b>ICCV 2023</b>
 </div>
 
-<code align="center" margin-botttom="6em">
+```
 from dataset import ArnoldDataset, prepare_batch
 cfg = {}
 train_dataset = ArnoldDataset('/home/chemrobot/Documents/RichardHanxu2023/SRTACT_Eval/arnold_re_rendered/open_drawer/train', task, cfg)
@@ -17,7 +17,7 @@ for batch_ndx, sample in enumerate(train_loader):
             batch['ignore_collisions'] = torch.zeros(batch_size, 1).to(device).long()
             batch = prepare_batch(train_dataset, batch)
             # rest of the code
-</code>
+```
 
 <div align="center" margin-bottom="6em">
 Ran Gong<sup>✶</sup>, Jiangyong Huang<sup>✶</sup>, Yizhou Zhao, Haoran Geng, Xiaofeng Gao, Qingyang Wu <br/> Wensi Ai, Ziheng Zhou, Demetri Terzopoulos, Song-Chun Zhu, Baoxiong Jia, Siyuan Huang
