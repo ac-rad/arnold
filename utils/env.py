@@ -4,7 +4,7 @@ from scipy.spatial.transform import Slerp
 from scipy.spatial.transform import Rotation as R
 from peract.utils import get_obs_batch_dict
 from .transforms import create_pcd_hardcode, quat_diff_rad, get_pose_relat, get_pose_world
-CAMERAS = ['front', 'base', 'left', 'wrist_bottom', 'wrist']
+CAMERAS = ['front', 'base', 'left', 'wrist_bottom', 'wrist', 'forward', 'top', 'back', 'left', 'right']
 
 
 class Observation(object):

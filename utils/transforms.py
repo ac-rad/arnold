@@ -3,7 +3,7 @@ import numpy as np
 from pxr import Gf
 from .compute_points import compute_points
 
-CAMERAS = ['front', 'base', 'left', 'wrist_bottom', 'wrist']
+CAMERAS = ['front', 'base', 'left', 'wrist_bottom', 'wrist', 'forward', 'top', 'back', 'left', 'right']
 
 def transform_points(points, transform, translate=True):
     """ Apply linear transform to a np array of points.
