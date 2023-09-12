@@ -8,11 +8,13 @@
 
 ```
 from dataset import ArnoldDataset, prepare_batch
+
 cfg = {}
 train_dataset = ArnoldDataset('path_to_a_task_train or test or val_folder', task, cfg)
 train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=batch_size, pin_memory=True,num_workers=min(batch_size,os.cpu_count()//world_size), sampler=train_sampler, shuffle=shuffle, persistent_workers=True)
+
 for batch_ndx, sample in enumerate(train_loader):
-           batch = {k: v.to(device, non_blocking = True, dtype=torch.float) for k, v in sample.items() if type(v) == torch.Tensor}
+            batch = {k: v.to(device, non_blocking = True, dtype=torch.float) for k, v in sample.items() if type(v) == torch.Tensor}
             batch["language"] = sample["language"]
             batch['ignore_collisions'] = torch.zeros(batch_size, 1).to(device).long()
             batch = prepare_batch(train_dataset, batch)
