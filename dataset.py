@@ -3,24 +3,69 @@ import torch
 import pickle
 import random
 import numpy as np
-import hydra
+import torch.nn as nn
 from torch.utils.data import Dataset
 from scipy.spatial.transform import Rotation as R
 from cliport6d.utils.utils import get_fused_heightmap
-from utils.env import CAMERAS
 from utils.transforms import *
-from peract.agent import CLIP_encoder,T5_encoder, RoBERTa
-from peract.utils import point_to_voxel_index, normalize_quaternion, quaternion_to_discrete_euler
+import clip
 from tqdm import tqdm
 import einops
 from srt.utils.nerf import transform_points_torch, get_extrinsic_torch
 
+CAMERAS = ['front', 'base', 'left', 'wrist_bottom', 'wrist', 'forward', 'top', 'back', 'left', 'right']
 DEVICE = "cuda:0" if torch.cuda.is_available() else "cpu"
 pickle.DEFAULT_PROTOCOL=pickle.HIGHEST_PROTOCOL
 RANDOM_SEED=1125
 random.seed(RANDOM_SEED)
 np.random.seed(RANDOM_SEED)
 torch.manual_seed(RANDOM_SEED)
+
+class CLIP_encoder(nn.Module):
+    def __init__(self, device):
+        super().__init__()
+        self.device = device
+        self.model, preprocess = clip.load("RN50", device=device, jit=False)
+    
+    @torch.no_grad()
+    def encode_text(self, text):
+        tokens = clip.tokenize(text)
+        tokens = tokens.to(self.device)
+        x = self.model.token_embedding(tokens).type(self.model.dtype)   # [B, T, D]
+
+        x = x + self.model.positional_embedding.type(self.model.dtype)
+        x = x.permute(1, 0, 2)   # BTD -> TBD
+        x = self.model.transformer(x)
+        x = x.permute(1, 0, 2)   # TBD -> BTD
+        x = self.model.ln_final(x).type(self.model.dtype)
+
+        return x
+
+def point_to_voxel_index(points: np.ndarray, voxel_size: np.ndarray, coord_bounds: np.ndarray):
+    bb_mins = np.array(coord_bounds[0:3])
+    bb_maxs = np.array(coord_bounds[3:])
+    dims_m_one = np.array([voxel_size] * 3) - 1
+    bb_ranges = bb_maxs - bb_mins
+    res = bb_ranges / (np.array([voxel_size] * 3) + 1e-12)
+    voxel_indices = np.minimum(np.floor((points - bb_mins) / (res + 1e-12)).astype(np.int32), dims_m_one)
+    return voxel_indices
+
+def normalize_quaternion(quat):
+    quat = np.array(quat) / np.linalg.norm(quat, axis=-1, keepdims=True)
+    quat = quat.reshape(-1, 4)
+    for i in range(quat.shape[0]):
+        if quat[i, -1] < 0:
+            quat[i] = -quat[i]
+    return quat
+
+
+def quaternion_to_discrete_euler(quaternion, resolution):
+    euler = R.from_quat(quaternion).as_euler('xyz', degrees=True) + 180
+    assert np.min(euler) >= 0 and np.max(euler) <= 360
+    disc = np.around((euler / resolution)).astype(int)
+    disc[disc == int(360 / resolution)] = 0
+    return disc
+
 
 def parse_state(filename):
     units = filename.split('-')
@@ -46,12 +91,12 @@ def create_lang_encoder(cfg, device):
     lang_encoder = 'clip'
     if lang_encoder == 'clip':
         return CLIP_encoder(device)
-    elif cfg.lang_encoder == 't5':
-        return T5_encoder(cfg.t5_cfg, device)
-    elif cfg.lang_encoder == 'roberta':
-        return RoBERTa(cfg.roberta_cfg, device)
-    elif cfg.lang_encoder == 'none':
-        return None
+    # elif cfg.lang_encoder == 't5':
+    #     return T5_encoder(cfg.t5_cfg, device)
+    # elif cfg.lang_encoder == 'roberta':
+    #     return RoBERTa(cfg.roberta_cfg, device)
+    # elif cfg.lang_encoder == 'none':
+    #     return None
     else:
         raise ValueError('Language encoder key not supported')
 
