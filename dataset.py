@@ -12,6 +12,8 @@ from utils.transforms import *
 from peract.agent import CLIP_encoder,T5_encoder, RoBERTa
 from peract.utils import point_to_voxel_index, normalize_quaternion, quaternion_to_discrete_euler
 from tqdm import tqdm
+import einops
+from srt.utils.nerf import transform_points_torch, get_extrinsic_torch
 
 DEVICE = "cuda:0" if torch.cuda.is_available() else "cpu"
 pickle.DEFAULT_PROTOCOL=pickle.HIGHEST_PROTOCOL
@@ -83,17 +85,10 @@ def prepare_batch(dataset, batch_data, lang_embed_cache=None, device='cuda:0'):
 
         inp = {}
         inp.update({
-            # 'input_images': rgb_images,
-            # 'ext_matrices': ext_matrices,
-            # 'intr_matrices': intr_matrices,
-            # 'input_camera_pos': camera_positions,
-            # 'input_rays': camera_rays,
-            # 'keyframes': keyframes,
-            'trans_action_indicies': torch.from_numpy(trans_action_indices),
-            'rot_grip_action_indicies': torch.from_numpy(rot_grip_action_indices),
+            'trans_action_indicies': torch.from_numpy(trans_action_indices).long(),
+            'rot_grip_action_indicies': torch.from_numpy(rot_grip_action_indices).long(),
             'states': torch.from_numpy(states),
             'lang_goal_embs': lang_goal_embs.to(device, dtype=torch.float),
-            # 'low_dim_state': low_dim_state
         })
 
         for k in inp.keys():
@@ -103,7 +98,7 @@ def prepare_batch(dataset, batch_data, lang_embed_cache=None, device='cuda:0'):
         return batch_data
 
 class ArnoldDataset(Dataset):
-    def __init__(self, data_path, task, cfg, obs_type='rgb', offset_bound=np.array([-0.63, 0, -0.63, 0.63, 1.26, 0.63])):
+    def __init__(self, data_path, task, cfg, obs_type='rgb', offset_bound=np.array([-0.63, 0, -0.63, 0.63, 1.26, 0.63]), canonical=False):
         """
         Dataset structure: {
             object_id: {
@@ -123,6 +118,7 @@ class ArnoldDataset(Dataset):
         self.episode_dict = {}
         self.lang_encoder = create_lang_encoder(cfg, DEVICE)
         self.lang_embed_cache = InstructionEmbedding(self.lang_encoder)
+        self.canonical = canonical
         self._load_keyframes()
         self.cfg = cfg
     
@@ -141,10 +137,14 @@ class ArnoldDataset(Dataset):
         goal_states = []
         ext_matrices = []
         intr_matrices = []
-        rgb_images = []
-        camera_positions = []
-        camera_rays = []
+        input_rgb_images = []
+        target_rgb_images = []
+        input_camera_positions = []
+        target_camera_positions = []
+        input_rays = []
+        target_rays = []
         keyframes = []
+        trans_point_2d = []
 
         for data in batch_data:
             for k, v in data['obs_dict'].items():
@@ -161,10 +161,14 @@ class ArnoldDataset(Dataset):
             goal_states.append(data['goal_state'])
             ext_matrices.append(data['ext_matrices'])
             intr_matrices.append(data['intr_matrices'])
-            rgb_images.append(data['input_images'])
-            camera_positions.append(data['input_camera_pos'])
-            camera_rays.append(data['input_rays'])
+            input_rgb_images.append(data['input_images'])
+            target_rgb_images.append(data['target_images'])
+            input_camera_positions.append(data['input_camera_pos'])
+            target_camera_positions.append(data['target_camera_pos'])
+            input_rays.append(data['input_rays'])
+            target_rays.append(data['target_rays'])
             keyframes.append(data['keyframe'])
+            trans_point_2d.append(data['trans_point_2d'])
 
 
         for k, v in obs_dict.items():
@@ -172,11 +176,16 @@ class ArnoldDataset(Dataset):
             obs_dict[k] = v.transpose(0, 3, 1, 2)   # peract requires input as [C, H, W]
         ext_matrices = np.stack(ext_matrices, axis=0)
         intr_matrices = np.stack(intr_matrices, axis=0)
-        rgb_images = np.stack(rgb_images, axis=0)
-        rgb_images = rgb_images.transpose(0, 1, 4, 2, 3)
-        camera_positions = np.stack(camera_positions, axis=0)
-        camera_rays = np.stack(camera_rays, axis=0)
+        input_rgb_images = np.stack(input_rgb_images, axis=0)
+        target_rgb_images = np.stack(target_rgb_images, axis=0)
+        input_rgb_images = input_rgb_images.transpose(0, 1, 4, 2, 3)
+        target_rgb_images = target_rgb_images.transpose(0, 1, 4, 2, 3)
+        input_camera_positions = np.stack(input_camera_positions, axis=0)
+        target_camera_positions = np.stack(target_camera_positions, axis=0)
+        input_rays = np.stack(input_rays, axis=0)
+        target_rays = np.stack(target_rays, axis=0)
         keyframes = np.stack(keyframes, axis=0)
+        trans_point_2d = np.stack(trans_point_2d, axis=0)
 
         bs = len(language_instructions)
         target_points = np.stack(target_points, axis=0)
@@ -203,20 +212,21 @@ class ArnoldDataset(Dataset):
         inp = {}
         inp.update(obs_dict)
         inp.update({
-            'input_images': rgb_images[:3],
-            'target_images': rgb_images[5:],
+            'input_images': input_rgb_images,
+            'target_images': target_rgb_images,
             'ext_matrices': ext_matrices,
             'intr_matrices': intr_matrices,
-            'input_camera_pos': camera_positions[:3],
-            'target_camera_pos': camera_positions[5:],
-            'input_rays': camera_rays[:3],
-            'target_rays': camera_rays[5:],
+            'input_camera_pos': input_camera_positions,
+            'target_camera_pos': target_camera_positions,
+            'input_rays': input_rays,
+            'target_rays': target_rays,
             'keyframes': keyframes,
             'trans_action_indicies': trans_action_indices,
             'rot_grip_action_indicies': rot_grip_action_indices,
             'states': states,
             'lang_goal_embs': lang_goal_embs,
-            'low_dim_state': low_dim_state
+            'low_dim_state': low_dim_state,
+            'trans_point_2d': trans_point_2d,
         })
 
         for k, v in inp.items():
@@ -263,7 +273,6 @@ class ArnoldDataset(Dataset):
                 # pick phase
                 step = gt_frames[0].copy()
                 robot_base_pos = step['robot_base'][0] / 100
-                print(f'Robot Base {robot_base_pos * 100}')
                 robot_forward_direction = R.from_quat(step['robot_base'][1][[1,2,3,0]]).as_matrix()[:, 0]
                 robot_forward_direction[1] = 0   # height
                 robot_forward_direction = robot_forward_direction / np.linalg.norm(robot_forward_direction) * 0.5   # m
@@ -289,15 +298,39 @@ class ArnoldDataset(Dataset):
                 gripper_joint_positions = np.clip(gripper_joint_positions, 0, 0.04)
                 timestep = 0
                 low_dim_state = np.array([gripper_open, *gripper_joint_positions, timestep])
+                target_rays = camera_rays[5:].reshape(-1, 3)
+                target_camera_pos = einops.repeat(camera_locations[5:], 'm n -> m k n', k=target_rays.shape[0] // camera_locations[5:].shape[0]).reshape(-1,3)
+                trans_pose = torch.FloatTensor(target_points[:3])
+        
+                point_2d = []
+                pose = np.append(target_points[:3], 1)
+                for i in range(5, 10):
+                    point = np.linalg.inv(ext_matrices[i]) @ pose
+                    pt = int_matrices[i] @ point[:-1]
+                    pt = np.rint(pt[:-1] / pt[-1])
+                    point_2d.append(pt)
+                
+                trans_point_2d = torch.LongTensor(np.array(point_2d))
+                
+                input_rays = camera_rays[:3]
+                input_camera_pos = camera_locations[:3]
+
+                if self.canonical:
+                    canonical_extrinsic = torch.FloatTensor(np.linalg.inv(ext_matrices[5]))
+                    input_rays = transform_points_torch(input_rays, canonical_extrinsic, translate=False)
+                    input_camera_pos = transform_points_torch(input_camera_pos, canonical_extrinsic)
+                    target_rays = transform_points_torch(target_rays, canonical_extrinsic, translate=False)
+                    target_camera_pos = transform_points_torch(target_camera_pos, canonical_extrinsic)
+
 
                 episode_dict1 = {
                     "img": img,   # [H, W, 6]
                     "input_images": rgb_images[:3],
-                    "target_images": rgb_images[5:],
-                    "input_camera_pos": camera_locations[:3],
-                    "target_camera_pos": camera_locations[5:],
-                    "input_rays": camera_rays[:3],
-                    "target_rays": camera_rays[5:],
+                    "target_pixels": rgb_images[5:].reshape(-1, 3),
+                    "input_camera_pos": input_camera_pos,
+                    "target_camera_pos": target_camera_pos,
+                    "input_rays": input_rays,
+                    "target_rays": target_rays,
                     "ext_matrices": ext_matrices,
                     "intr_matrices": int_matrices,
                     "obs_dict": obs_dict,   # { {camera_name}_{rgb/point_cloud}: [H, W, 3] }
@@ -311,6 +344,7 @@ class ArnoldDataset(Dataset):
                     "bounds": self.task_offset,   # [3, 2]
                     "pixel_size": self.pixel_size,   # scalar
                     "keyframe": timestep,
+                    "trans_point_2d": trans_point_2d,
                 }
 
                 self.episode_dict[obj_id]['act1'].append(episode_dict1)
@@ -348,15 +382,38 @@ class ArnoldDataset(Dataset):
                 gripper_joint_positions = np.clip(gripper_joint_positions, 0, 0.04)
                 timestep = 1
                 low_dim_state = np.array([gripper_open, *gripper_joint_positions, timestep])
+                target_rays = camera_rays[5:].reshape(-1, 3)
+                target_camera_pos = einops.repeat(camera_locations[5:], 'm n -> m k n', k=target_rays.shape[0] // camera_locations[5:].shape[0]).reshape(-1,3)
+                trans_pose = torch.FloatTensor(target_points[:3])
+        
+                point_2d = []
+                pose = np.append(target_points[:3], 1)
+                for i in range(5, 10):
+                    point = np.linalg.inv(ext_matrices[i]) @ pose
+                    pt = int_matrices[i] @ point[:-1]
+                    pt = np.rint(pt[:-1] / pt[-1])
+                    point_2d.append(pt)
+                
+                trans_point_2d = torch.LongTensor(np.array(point_2d))
+                
+                input_rays = camera_rays[:3]
+                input_camera_pos = camera_locations[:3]
+
+                if self.canonical:
+                    canonical_extrinsic = torch.FloatTensor(np.linalg.inv(ext_matrices[5]))
+                    input_rays = transform_points_torch(input_rays, canonical_extrinsic, translate=False)
+                    input_camera_pos = transform_points_torch(input_camera_pos, canonical_extrinsic)
+                    target_rays = transform_points_torch(target_rays, canonical_extrinsic, translate=False)
+                    target_camera_pos = transform_points_torch(target_camera_pos, canonical_extrinsic)
 
                 episode_dict2 = {
                     "img": img,   # [H, W, 6]
                     "input_images": rgb_images[:3],
-                    "target_images": rgb_images[5:],
-                    "input_camera_pos": camera_locations[:3],
-                    "target_camera_pos": camera_locations[5:],
-                    "input_rays": camera_rays[:3],
-                    "target_rays": camera_rays[5:],
+                    "target_pixels": rgb_images[5:].reshape(-1, 3),
+                    "input_camera_pos": input_camera_pos,
+                    "target_camera_pos": target_camera_pos,
+                    "input_rays": input_rays,
+                    "target_rays": target_rays,
                     "ext_matrices": ext_matrices,
                     "intr_matrices": int_matrices,
                     "obs_dict": obs_dict,   # { {camera_name}_{rgb/point_cloud}: [H, W, 3] }
@@ -370,6 +427,7 @@ class ArnoldDataset(Dataset):
                     "bounds": self.task_offset,   # [3, 2]
                     "pixel_size": self.pixel_size,   # scalar
                     "keyframe": timestep,
+                    "trans_point_2d": trans_point_2d,
                 }
 
                 self.episode_dict[obj_id]['act2'].append(episode_dict2)
