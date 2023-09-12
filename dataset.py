@@ -422,6 +422,11 @@ class ArnoldDataset(Dataset):
 
                 if self.canonical:
                     canonical_extrinsic = torch.FloatTensor(np.linalg.inv(ext_matrices[5]))
+                    input_rays = torch.FloatTensor(input_rays)
+                    input_camera_pos = torch.FloatTensor(input_camera_pos)
+                    target_rays = torch.FloatTensor(target_rays)
+                    target_camera_pos = torch.FloatTensor(target_camera_pos)
+
                     input_rays = transform_points_torch(input_rays, canonical_extrinsic, translate=False)
                     input_camera_pos = transform_points_torch(input_camera_pos, canonical_extrinsic)
                     target_rays = transform_points_torch(target_rays, canonical_extrinsic, translate=False)
@@ -506,6 +511,11 @@ class ArnoldDataset(Dataset):
 
                 if self.canonical:
                     canonical_extrinsic = torch.FloatTensor(np.linalg.inv(ext_matrices[5]))
+                    input_rays = torch.FloatTensor(input_rays)
+                    input_camera_pos = torch.FloatTensor(input_camera_pos)
+                    target_rays = torch.FloatTensor(target_rays)
+                    target_camera_pos = torch.FloatTensor(target_camera_pos)
+                    
                     input_rays = transform_points_torch(input_rays, canonical_extrinsic, translate=False)
                     input_camera_pos = transform_points_torch(input_camera_pos, canonical_extrinsic)
                     target_rays = transform_points_torch(target_rays, canonical_extrinsic, translate=False)
