@@ -4,11 +4,9 @@ from omegaconf import OmegaConf
 import os
 import torch
 import torch.nn as nn
-import sys
 import numpy as np
 from pathlib import Path
-sys.path.append('/home/chemrobot/Documents/RichardHanxu2023/SRTACT_Eval/arnold_dataset')
-from arnold_dataset.environment.runner_utils import get_simulation
+from environment.runner_utils import get_simulation
 import matplotlib.pyplot as plt
 
 SAVE_DIR = '/home/chemrobot/Documents/RichardHanxu2023/SRTACT_Eval/arnold_re_rendered'
@@ -37,8 +35,10 @@ def save_camera_renders(obs, gt_frame, obs_counter):
 def add_cube_to_observation(obs, gt_frame):
    return np.concatenate((gt_frame['images'], obs['images'][5:]))
 
-def save_observation_np(gt_frame, path):
-   np.savez(path, gt_frame)
+def save_observation_np(anno, gt_frame, path):
+  anno = dict(anno)
+  anno['gt'] = gt_frame.copy()
+  np.savez(path, anno)
 
 def main(cfg):
   device = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -97,7 +97,7 @@ def main(cfg):
           # save_camera_renders(obs, gt_frames[i+1], obs_counter)
           obs_counter += 1
         
-        save_observation_np(gt_frames, Path(f'{SAVE_DIR}/{task}/{SPLIT}/{fname.split("/")[-1]}'))
+        save_observation_np(anno, gt_frames, Path(f'{SAVE_DIR}/{task}/{SPLIT}/{fname.split("/")[-1]}'))
         env.stop()
     
     simulation_app.close()
