@@ -65,12 +65,12 @@ def create_int_matrix(camera: dict):
 
     cx = cy = height/2
 
-    # The result array is homogeneous 4x4
+    # The result array is 3x3
     return np.array([
-        [fx, 0, cx],
-        [0, fy, cy],
+        [fx/100, 0, cx],
+        [0, fy/100, cy],
         [0, 0, 1],
-    ], dtype=np.int32)
+    ])
 
 def get_data_from_cameras(imgs):
     """

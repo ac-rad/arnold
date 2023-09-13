@@ -14,7 +14,7 @@ from omni.kit.material.library import get_material_prim_path
 from omni.isaac.dynamic_control import _dynamic_control
 from omni.physx.scripts import physicsUtils
 
-
+from scipy.spatial.transform import Rotation as R
 import pxr
 from pxr import UsdPhysics, Gf, PhysxSchema, UsdShade, UsdGeom
 import time
@@ -420,30 +420,34 @@ class BaseTask(ABC):
         main_stage = omni.usd.get_context().get_stage()
 
         robot_path = "/World_0/franka" 
-        # franka_base_path = f"{robot_path}/panda_hand" 
+        franka_gripper_path = f"{robot_path}/panda_hand" 
         franka_base_path = robot_path
 
         # Get the transform for the franka_base
         franka_base = main_stage.GetPrimAtPath(franka_base_path)
+        franka_grip = main_stage.GetPrimAtPath(franka_gripper_path)
         pose = omni.usd.utils.get_world_transform_matrix(franka_base)
-        
+        grip_pose = omni.usd.utils.get_world_transform_matrix(franka_grip)
+
         # Extract translation (translation part of the matrix)
         arnold_base_trans = pose.ExtractTranslation()
+        arnold_base_rotation = pose.ExtractRotationMatrix()
+        
+        arnold_gripper_trans = grip_pose.ExtractTranslation()
 
-        # print('Trans is')
-        # print(arnold_base_trans)
+        arnold_base_pose = np.eye(4, 4)
+        arnold_base_pose[:3, :3] = arnold_base_rotation
+        arnold_base_pose[:3, -1] = arnold_base_trans
 
-        scale = 3
 
         house_path = "/World_0/house"
 
         # Define the camera path within the main stage (you can choose any path you like)
-        camera_path_forward = "/World_0/Camera_Forward"
-        camera_path_top = "/World_0/Camera_Top"
-        camera_path_back = "/World_0/Camera_Back"
-        camera_path_left = "/World_0/Camera_Left"
-        camera_path_right = "/World_0/Camera_Right"
-        # camera_coa = "/World_0/CameraCOA"
+        camera_path_forward = f"/World_0/Camera_Forward"
+        camera_path_top = f"/World_0/Camera_Top"
+        camera_path_back = f"/World_0/Camera_Back"
+        camera_path_left = f"/World_0/Camera_Left"
+        camera_path_right = f"/World_0/Camera_Right"
         cam_paths = [camera_path_forward, camera_path_top, camera_path_back, camera_path_left, camera_path_right]
         # ['forward', 'top', 'back', 'left', 'right']
 
@@ -453,18 +457,95 @@ class BaseTask(ABC):
        [ 2.01308787e-01,  1.74974408e+00,  1.17497365e+00],
        [ 2.01308787e-01, -1.74984165e+00,  1.17497375e+00],
        [ 1.95110166e+00, -4.87864017e-05,  1.17497365e+00],
-       [-1.54848408e+00, -4.87864017e-05,  1.17497375e+00]]) # * 100
-        
-        center_of_action = (arnold_base_trans + translations[-1]) + (arnold_base_trans + translations[-2])
-        center_of_action /= 2
+       [-1.54848408e+00, -4.87864017e-05,  1.17497375e+00]])
 
+        base_translations = np.array([
+       [ 2.30881   ,  0.012797  ,  0.27997002],
+       [ 0.50881   ,  0.012797  ,  1.67997   ],
+       [-1.19119   ,  0.012797  ,  0.27997002],
+       [ 0.50881   , -1.78720295,  0.27997002],
+       [ 0.50881   ,  1.81279695,  0.27997002]]) * 100
+        
+        transformations = np.array([
+        [[-1.19209261e-07, -9.99999881e-01, -7.15255553e-07,  1.02519965e-06],
+        [-7.10542482e-14, -5.96046306e-07,  9.99999881e-01, -1.09999989e+00],
+        [-9.99999881e-01,  2.38418451e-07,  1.19209432e-07,  1.99999963e+00],
+        [ 0.00000000e+00,  0.00000000e+00,  0.00000000e+00,  1.00000000e+00],],
+        [[ 4.76837134e-07, -1.00000000e+00, -2.05465780e-07,  4.18297021e-07],
+        [-1.00000000e+00, -3.57627892e-07,  1.15903729e-07,  1.99999713e-01],
+        [-1.15903815e-07,  2.05465740e-07, -1.00000000e+00,  2.50000002e+00],
+        [ 0.00000000e+00,  0.00000000e+00,  0.00000000e+00,  1.00000000e+00],],
+        [[ 2.38418650e-07,  1.00000000e+00, -5.96046419e-07,  1.01327905e-06],
+        [-1.19209147e-07,  5.96046476e-07,  1.00000000e+00, -1.10000020e+00],
+        [ 1.00000000e+00, -2.38418508e-07,  1.19209432e-07,  1.49999987e+00],
+        [ 0.00000000e+00,  0.00000000e+00,  0.00000000e+00,  1.00000000e+00],],
+        [[-1.00000000e+00,  1.15903826e-07, -5.74250541e-07,  2.00000843e-01],
+        [-5.74250576e-07, -1.78813889e-07,  1.00000006e+00, -1.10000030e+00],
+        [ 1.15903755e-07,  1.00000006e+00,  1.19209370e-07 , 1.79999991e+00],
+        [ 0.00000000e+00,  0.00000000e+00,  0.00000000e+00,  1.00000000e+00],],
+        [[ 1.00000000e+00, -3.00296271e-07, -5.63713837e-07, -1.99998842e-01],
+        [ 5.63713938e-07,  3.57627742e-07,  1.00000006e+00, -1.10000085e+00],
+        [-3.00296066e-07, -1.00000006e+00,  3.57628081e-07,  1.79999973e+00],
+        [ 0.00000000e+00,  0.00000000e+00,  0.00000000e+00,  1.00000000e+00],],
+        ])
+
+        # subtract rlbench base from inv(exts)
+        transformations[-1][:3, -1] -= [-0.012797, 0.82003, -0.30881]
+        transformations[-2][:3, -1] -= [-0.012797, 0.82003, -0.30881]
+
+        for i, original_pose_matrix in enumerate(transformations):
+            # Extract the original rotation matrix (YZX) and translation vector
+            original_rotation_matrix = original_pose_matrix[:3, :3]
+            original_translation_vector = original_pose_matrix[:3, 3]
+
+            # Create a rotation object from the original rotation matrix
+            rot_YZX = R.from_matrix(original_rotation_matrix)
+
+            # Convert the rotation to Euler angles in 'XYZ' order
+            rot_XYZ = rot_YZX.as_euler('XYZ', degrees=False)
+
+            # Create a new 4x4 'XYZ' pose matrix 
+            xyz_pose_matrix = np.eye(4, 4)
+            xyz_pose_matrix[:3, :3] = R.from_euler('XYZ', rot_XYZ, degrees=False).as_matrix()
+            xyz_pose_matrix[:3, 3] = original_translation_vector[[2, 0, 1]]
+
+            # overwrite the transformations
+            transformations[i] = xyz_pose_matrix
+
+        # lower z-value means going higher in arnold
+        transformations[-1][2, -1] *= -1
+        transformations[-2][2, -1] *= -1
+
+        # convert to cm
+        transformations[-1][:3, -1] *= 100
+        transformations[-2][:3, -1] *= 100
+
+        # transform to get left and right cube positions
+        left_cam_transformed = arnold_base_pose @ transformations[-1] 
+        left_cam_pos = left_cam_transformed[:3, -1]
+        right_cam_transformed = arnold_base_pose @ transformations[-2]
+        right_cam_pos = right_cam_transformed[:3, -1]
+
+        print("BASE TRANS")
+        print(arnold_base_trans)
+        
+        # This does not work correct for calculating COA!
+        center_of_action = (left_cam_pos + right_cam_pos) / 2
+
+        # This works well for COA
+        # center_of_action = (arnold_gripper_trans + translations[-1]) + (arnold_gripper_trans + translations[-2])
+        # center_of_action /= 2
+
+        print("CENTER OF ACTION")
+        print(center_of_action)
+        
         translations = np.array([
-            [0, -1.74979287, 0],
-            [0, 0, 1.74979287],
+            [0, -1.74979287, 0], # 0.2 is too close, the camera doesn't show the robot at all!
+            [0, 0, 1.74979287], # 1.74979287
             [0, 1.74979287, 0],
             [-1.74979287, 0, 0],
             [1.74979287, 0, 0],
-            ]) * 2.5
+            ]) * 5 # make the cameras go further to have the whole image, otherwise the robot is not contained in images
         
         # The default metric in ommni kit is centimeters, so we multiply by 100
         translations *= 100
@@ -474,17 +555,8 @@ class BaseTask(ABC):
             camera = UsdGeom.Camera.Define(main_stage, cam_path)
             camera = UsdGeom.Xformable(camera)
 
-            # if i == 5:
-            #     transformation_matrix = Gf.Matrix4d()
-            #     transformation_matrix.SetTranslateOnly(Gf.Vec3d(*center_of_action))
-            #     camera.AddTransformOp().Set(transformation_matrix)
-            #     print(f'Center of Action is {center_of_action} | {type(center_of_action)}')
-            #     continue
-
             # Calculate the up vector (you can choose an appropriate up vector based on your desired orientation)
             up_vector = Gf.Vec3d(0.0, 1.0, 0.0)
-            
-            translations[i][1] += 16.33
 
             cam_loc = Gf.Vec3d(*translations[i]) + Gf.Vec3d(*center_of_action)  # Camera position
             
@@ -494,10 +566,9 @@ class BaseTask(ABC):
                 Gf.Vec3d(*center_of_action),  # Look-at position
                 up_vector  # Up vector
             )
-
+            
+            # rotation_matrix = Gf.Matrix3d(cam_pose[:3, :3].tolist())
             # rotation_matrix = Gf.Matrix3d(rotations[i])
-            # print('Rot matrix is')
-            # print(rotation_matrix)
 
             # Apply translation
             transformation_matrix = Gf.Matrix4d()
@@ -508,8 +579,9 @@ class BaseTask(ABC):
             camera.AddTransformOp().Set(transformation_matrix)
             
             if 'right' in cam_path.lower() or 'left' in cam_path.lower():
-                # Rotate the camera by 180 degrees around its local X-axis
+                # Rotate the camera by 180 degrees around its local Y-axis
                 camera.AddRotateYOp().Set(value=180.0)
+
 
             self._set_prim_invisible(house_path, main_stage)
             

@@ -382,21 +382,29 @@ class ArnoldDataset(Dataset):
                 robot_forward_direction[1] = 0   # height
                 robot_forward_direction = robot_forward_direction / np.linalg.norm(robot_forward_direction) * 0.5   # m
                 bound_center = robot_base_pos + robot_forward_direction
+                print(f'ROBOT BASE: {robot_base_pos}')
+                print(f'BOUND CENTER: {bound_center}')
 
                 cmap, hmap, obs_dict = self.get_step_obs(step, self.task_offset[[0, 2, 1]], self.pixel_size, type=self.obs_type)
                 rgb_images, camera_locations, camera_rays, ext_matrices, int_matrices, _ = get_data_from_cameras(step['images'])
+                
+                # convert to meters
+                # for i in range(len(int_matrices)):
+                #     int_matrices[i] /= 100
+            
                 hmap = np.tile(hmap[..., None], (1,1,3))
                 img = np.concatenate([cmap, hmap], axis=-1)
 
                 obj_pos = gt_frames[2]['position_rotation_world'][0] / 100
-                obj_pos = obj_pos - bound_center
+                obj_pos = obj_pos # - bound_center
 
                 act_pos = gt_frames[2]['position_rotation_world'][0].copy()
                 act_rot = gt_frames[2]['position_rotation_world'][1].copy()
                 act_pos /= 100
                 act_rot = act_rot[[1,2,3,0]]   # wxyz to xyzw
                 target_points = self.get_act_label_from_abs(pos_abs=act_pos, rot_abs=act_rot)
-                target_points[:3] = target_points[:3] - bound_center
+                target_points[:3] = target_points[:3]  # - bound_center
+                print(f'TARGET POINTS: {target_points}')
 
                 gripper_open = 1
                 gripper_joint_positions = step['gripper_joint_positions'] / 100
@@ -432,10 +440,21 @@ class ArnoldDataset(Dataset):
                     target_rays = transform_points_torch(target_rays, canonical_extrinsic, translate=False)
                     target_camera_pos = transform_points_torch(target_camera_pos, canonical_extrinsic)
 
+                robot_pose = np.eye(4, 4)
+                robot_pose[:3, :3] = R.from_quat(step['robot_base'][1][[1,2,3,0]]).as_matrix()
+                robot_pose[:3, -1] = robot_base_pos
+
+                new_ext = np.zeros_like(ext_matrices)
+
+                for i, ext in enumerate(ext_matrices):
+                    new_ext[i] = robot_pose @ np.linalg.inv(ext_matrices[i].T)
+                
+                ext_matrices = new_ext
 
                 episode_dict1 = {
-                    "img": img,   # [H, W, 6]
+                    "rgb_images": rgb_images,
                     "input_images": rgb_images[:3],
+                    "target_images": rgb_images[5:],
                     "target_pixels": rgb_images[5:].reshape(-1, 3),
                     "input_camera_pos": input_camera_pos,
                     "target_camera_pos": target_camera_pos,
@@ -468,6 +487,10 @@ class ArnoldDataset(Dataset):
                 bound_center = robot_base_pos + robot_forward_direction
 
                 rgb_images, camera_locations, camera_rays, ext_matrices, int_matrices, _ = get_data_from_cameras(step['images'])
+                # convert to meters
+                # for i in range(len(int_matrices)):
+                #     int_matrices[i] /= 100
+
                 cmap, hmap, obs_dict = self.get_step_obs(step, self.task_offset[[0, 2, 1]], self.pixel_size, type=self.obs_type)
                 hmap = np.tile(hmap[..., None], (1,1,3))
                 img = np.concatenate([cmap, hmap], axis=-1)
@@ -485,7 +508,7 @@ class ArnoldDataset(Dataset):
                 act_pos /= 100
                 act_rot = act_rot[[1,2,3,0]]   # wxyz to xyzw
                 target_points = self.get_act_label_from_abs(pos_abs=act_pos, rot_abs=act_rot)
-                target_points[:3] = target_points[:3] - bound_center
+                target_points[:3] = target_points[:3] # - bound_center
 
                 gripper_open = 0
                 gripper_joint_positions = step['gripper_joint_positions'] / 100
@@ -521,9 +544,22 @@ class ArnoldDataset(Dataset):
                     target_rays = transform_points_torch(target_rays, canonical_extrinsic, translate=False)
                     target_camera_pos = transform_points_torch(target_camera_pos, canonical_extrinsic)
 
+
+                robot_pose = np.eye(4, 4)
+                robot_pose[:3, :3] = R.from_quat(step['robot_base'][1][[1,2,3,0]]).as_matrix()
+                robot_pose[:3, -1] = robot_base_pos
+
+                new_ext = np.zeros_like(ext_matrices)
+
+                for i, ext in enumerate(ext_matrices):
+                    new_ext[i] = robot_pose @ np.linalg.inv(ext_matrices[i].T)
+                
+                ext_matrices = new_ext
+
                 episode_dict2 = {
-                    "img": img,   # [H, W, 6]
+                    "rgb_images": rgb_images,
                     "input_images": rgb_images[:3],
+                    "target_images": rgb_images[5:],
                     "target_pixels": rgb_images[5:].reshape(-1, 3),
                     "input_camera_pos": input_camera_pos,
                     "target_camera_pos": target_camera_pos,
@@ -616,7 +652,7 @@ class ArnoldDataset(Dataset):
             robot_forward_direction[1] = 0
             robot_forward_direction = robot_forward_direction / np.linalg.norm(robot_forward_direction) * 0.5   # m
             bound_center = step['robot_base'][0] / 100 + robot_forward_direction
-            point_cloud = point_cloud - bound_center
+            point_cloud = point_cloud # - bound_center
 
             pcds.append(point_cloud[:, :, [0, 2, 1]])   # pcds is for cliport6d, which requires z-up
 
